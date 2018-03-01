@@ -1,0 +1,288 @@
+.\" $Id$
+.\" %GPL_START_LICENSE%
+.\" ---------------------------------------------------------------------
+.\" Copyright 2015-2016, Google, Inc.
+.\" Copyright (c) 2009-2015, Pittsburgh Supercomputing Center (PSC).
+.\" All rights reserved.
+.\"
+.\" This program is free software; you can redistribute it and/or modify
+.\" it under the terms of the GNU General Public License as published by
+.\" the Free Software Foundation; either version 2 of the License, or (at
+.\" your option) any later version.
+.\"
+.\" This program is distributed WITHOUT ANY WARRANTY; without even the
+.\" implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+.\" PURPOSE.  See the GNU General Public License contained in the file
+.\" `COPYING-GPL' at the top of this distribution or at
+.\" https://www.gnu.org/licenses/gpl-2.0.html for more details.
+.\" ---------------------------------------------------------------------
+.\" %END_LICENSE%
+.Dd March 23, 2016
+.Dt SLADM 7
+.ds volume PSC \- SLASH2 Administrator's Manual
+.Os http://www.psc.edu/
+.Sh NAME
+.Nm sladm
+.Nd
+.Tn SLASH2
+administration guide
+.Sh DESCRIPTION
+.Tn SLASH2
+is a distributed network file system featuring:
+.Pp
+.Bl -bullet -compact -offset indent
+.It
+support for data multi residency at the file chunk level
+.It
+system managed data transfer
+.It
+inline checksum verification
+.El
+.Pp
+This document describes the steps involving in creating and deploying a
+.Tn SLASH2
+file system.
+.Ss Creating a File System for SLASH2 Metadata
+.Tn SLASH2
+uses
+.Tn ZFS ,
+and specifically
+.Xr zfs-fuse 8 ,
+for its backend.
+This backend is called the metadata file system
+.Pq MDFS .
+.Pp
+To create an MDFS, first launch
+.Xr zfs-fuse 8 :
+.Bd -literal -offset indent
+mds-host# zfs-fuse
+.Ed
+.Pp
+Now follow the normal zpool creation instructions (i.e. the official
+.Tn ZFS
+documentation), tailored to the deployment requirements, such as drive
+redundancy, cache devices, etc.
+.Pp
+For example:
+.Bd -literal -offset indent
+mds-host# zpool create mypool sda		# single drive MDFS
+mds-host# zpool create mypool mirror sda sdb	# two-drive mirror
+.Ed
+.Pp
+Other pool settings that may tuned (this list is by no means
+comprehensive):
+.Bd -literal -offset indent
+mds-host# zfs set atime=off mypool
+mds-host# zfs set compression=lz4 mypool
+mds-host# zpool set cachefile=/mypool.zcf mypool
+.Ed
+.Pp
+Before this MDFS can be used by the
+.Tn SLASH2
+metadata server, it must be initialized or
+.Dq formatted
+with
+.Xr slmkfs 8 :
+.Bd -literal -offset indent
+mds-host# slmkfs -I $site_id:$res_id /mypool
+.Ed
+.Pp
+The
+.Va $site_id
+must match the site's ID and
+.Va $res_id
+must match the resource's ID as specified in
+.Xr slcfg 5 ,
+in hexadecimal format with leading
+.Sq 0x
+prefix notation.
+.Pp
+During formatting of the MDFS, a SLASH2 deployment
+.Dq file system universally unique ID
+.Pq fsuuid
+will be generated and written into a special location inside the MDFS.
+This value should be stashed into the deployment's
+.Xr slcfg 5
+file as all daemons
+.Po
+.Xr slashd 8 and
+.Xr sliod 8
+.Pc
+in the deployment must agree on its value.
+.Pp
+Now that the MDFS has been set up,
+.Xr zfs-fuse 8
+must be terminated before the
+.Tn SLASH2
+metadata server can access it:
+.Bd -literal -offset indent
+mds-host# umount /mypool
+mds-host# pkill zfs-fuse
+.Ed
+.Ss Metadata Server Po Ss MDS Pc
+The metadata server
+.Xr slashd 8
+maintains a journal file for resuming interrupted operations.
+This can be created with the
+.Xr slmkjrnl 8
+utility:
+.Bd -literal -offset indent
+mds-host# slmkjrnl -f -b /dev/disk0 -u $fsuuid
+.Ed
+.Pp
+Note that a low-latency, non-volatile device
+.Pq such as Tn NVRAM
+is ideal for this function.
+.Pp
+The MDS server also maintains an
+.Tn SQLite
+database for managing some of its workloads.
+This is created automatically by
+.Xr slashd 8
+as necessary for its operation.
+.Pp
+Now launch
+.Xr slashd 8 :
+.Bd -literal -offset indent
+mds-host# slashd -p /mypool.zcf mypool
+.Ed
+.Pp
+.Xr slmctl 8
+can be used to control live operation of
+.Xr slashd 8
+once it is online.
+.Ss I/O Server
+The I/O server
+.Xr sliod 8
+handles requests for actual file data that is read and written in a
+.Tn SLASH2
+deployment.
+The backend storage it uses is rooted in the directory specified by the
+.Ic fsroot
+option under the IOS resource's profile in the
+.Xr slcfg 5
+file.
+This directory must be an existing POSIX file system
+.Pq e.g. ext3, ZFS, xfs, UFS, btrfs, etc. .
+.Pp
+Note that it is
+.Sy not advised
+to use the
+.Xr zfs-fuse 8
+system included in the SLASH2 distribution as the IOS backend file
+system due to poor performance, software maintenance, and other reasons.
+.Pp
+For its core operation,
+.Xr sliod 8
+simply writes SLASH2 file data under this
+.Ic fsroot
+location, albeit in a special naming convention.
+As such, this directory must be initialized for use by
+.Xr slmkfs 8 ,
+very similarly to the way the MDFS was formatted above.
+.Pp
+For example:
+.Bd -literal -offset indent
+ios-host# slmkfs -i -u $fsuuid -I $site_id:$res_id /$fsroot
+.Ed
+.Pp
+In this example,
+.Va $fsuuid
+is the value generated when formatting the MDFS via
+.Xr slmkfs 8
+above.
+.Pp
+Next, ensure that the deployment's shared communication key
+.Pq the Dq authbuf key file
+has been installed on the IOS host.
+The location of this file defaults to
+.Pa /var/lib/slash/authbuf.key
+and is generated automatically by
+.Xr slashd 8
+or can be generated manually with
+.Xr slkeymgt 8 :
+.Bd -literal -offset indent
+ios-host# scp mds-host:/var/lib/slash/authbuf.key /var/lib/slash
+.Ed
+.Pp
+Now launch
+.Xr sliod 8 :
+.Bd -literal -offset indent
+ios-host# sliod
+.Ed
+.Pp
+.Xr slictl 8
+can be used to control live operation of the I/O server once it is
+online.
+.Ss Client Mount Daemon
+To mount a
+.Tn SLASH2
+deployment on a client host, the deployment's shared authbuf key
+must be installed.
+The location of this file defaults to
+.Pa /var/lib/slash/authbuf.key
+and is be generated automatically by
+.Xr slashd 8
+or can be generated manually with
+.Xr slkeymgt 8 :
+.Bd -literal -offset indent
+client-host# scp mds-host:/var/lib/slash/authbuf.key /var/lib/slash
+.Ed
+.Pp
+Now
+.Xr slash2client.so 5
+may be used to mount a
+.Tn SLASH2
+file system under a directory node on the local system:
+.Bd -literal -offset indent
+client-host# mount_slash -U /myfs
+.Ed
+.Pp
+.Xr msctl 8
+can be used to control live operation of the client mount point once it
+is online.
+.Sh CAVEATS
+Running metadata and I/O servers on the same machine currently requires
+configuring each daemon to listen on different addresses.
+Furthermore, the network configuration must be such that each daemon can
+access clients via the client destination network address.
+.Pp
+For example, setups where
+.Xr slashd 8
+residing on one network on
+.Li eth0
+reaches a client over a different client network address than
+.Xr sliod 8
+residing on a different network on
+.Li eth1
+will not work.
+.Pp
+The reason for this is because alternative
+.Tn TCP
+ports cannot be used for each of
+.Xr slashd 8
+and
+.Xr sliod 8 ,
+as
+.Tn SLASH2
+utilizes the Lustre networking stack which does not easily
+permit applications from connecting to multiple peers on differing
+.Tn TCP
+ports.
+A single
+.Tn TCP
+port must be used globally for all daemons.
+.El
+.Sh SEE ALSO
+.Xr odtable 1 ,
+.Xr slash2client.so 5 ,
+.Xr slcfg 5 ,
+.Xr msctl 8 ,
+.Xr slashd 8 ,
+.Xr slictl 8 ,
+.Xr sliod 8 ,
+.Xr slkeymgt 8 ,
+.Xr slmctl 8 ,
+.Xr slmkfs 8 ,
+.Xr slmkjrnl 8 ,
+.Xr zpool 8

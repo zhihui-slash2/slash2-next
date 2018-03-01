@@ -1,0 +1,118 @@
+# @bounce_host pscuxa.psc.edu
+# @dsn dbi:SQLite:dbname=/local/tmp/s2tsuite.db
+
+# @mkcfg DEFINES+=-DPFLOG_FROM_LEVEL=PLL_INFO
+# mkcfg DEBUG=0
+
+# @testenv http_proxy=http://cache:3128
+# @client omnitopia:TMPDIR=/local/tmp:args=pagecache_maxsize=2g
+# @client polybius:TMPDIR=/local/tmp:args=pagecache_maxsize=2g
+# client zebes:TMPDIR=/local/tmp:args=pagecache_maxsize=2g
+# client lavos:TMPDIR=/local/tmp:args=pagecache_maxsize=2g
+
+# client yuzu:TMPDIR=/local/tmp:args=pagecache_maxsize=2g
+# client kiwi:TMPDIR=/local/tmp:args=pagecache_maxsize=2g
+
+set port=7001;
+set net=sdp4;
+
+set pref_mds="md0@SITE0";
+set pref_ios="io@SITE0";
+set fsuuid="4c0fa37db6e31719";
+
+site @SITE0 {
+	site_id			= 0x100;
+
+	resource md0 {
+		id		= 0x1;
+		type		= mds;
+		nids		= polybius-ib0.pvt;
+		# @host polybius
+
+		# @fmtcmd umount -f -l /tsuite || true
+		# @fmtcmd rm -rf /tsuite
+		# @fmtcmd mkdir -p /tsuite
+		# @fmtcmd mount -t tmpfs -o size=4128m tmpfs /tsuite
+		# @fmtcmd dd if=/dev/zero of=/tsuite/disk bs=1048576 count=4096
+
+		# @fmtcmd mv $data_dir $data_dir.old
+		# @fmtcmd mkdir -p $data_dir
+		# @fmtcmd mount -t tmpfs -o size=1080m tmpfs $data_dir
+		# @fmtcmd mv $data_dir.old/* $data_dir/
+		# @fmtcmd dd if=/dev/zero of=$data_dir/op-journal bs=1048576 count=1024
+
+		# @zpool_args /tsuite/disk
+		zpool_name	= "tsuite0_s2md";
+		# @TMPDIR /local/tmp
+	}
+
+	resource io0 {
+		type		= standalone_fs;
+		id		= 0x10;
+		fsroot		= /tsuite/slio;
+		nids		= omnitopia-ib0.pvt;
+		slab_cache_size	= 8g;
+		# @host omnitopia
+
+		# @fmtcmd umount -f -l /tsuite || true
+		# @fmtcmd rm -rf /tsuite
+		# @fmtcmd mkdir -p /tsuite
+		# @fmtcmd mount -t tmpfs -o size=60G tmpfs /tsuite
+		# @fmtcmd mkdir -p /tsuite/slio
+		# @TMPDIR /local/tmp
+	}
+
+	resource io1 {
+		type		= standalone_fs;
+		id		= 0x11;
+		fsroot		= /tsuite/slio;
+		nids		= zebes-ib0.pvt;
+		slab_cache_size	= 8g;
+		# @host zebes
+
+		# @fmtcmd umount -f -l /tsuite || true
+		# @fmtcmd rm -rf /tsuite
+		# @fmtcmd mkdir -p /tsuite
+		# @fmtcmd mount -t tmpfs -o size=60G tmpfs /tsuite
+		# @fmtcmd mkdir -p /tsuite/slio
+		# @TMPDIR /local/tmp
+	}
+
+	resource io {
+		type		= cluster_noshare_lfs;
+		id		= 0x100;
+		ios		= io0, io1;
+	}
+}
+
+#site @site1 {
+#	site_id			= 0x101;
+#
+#	resource md1 {
+#		zpool_name	=;
+#		journal		= sde;
+#		type		= mds;
+#		id		= 0x1;
+#		nids		= yuzu;
+#	}
+#
+#	resource io0 {
+#		type		= standalone_fs;
+#		id		= 0x10;
+#		fsroot		= /local/slio.tsuite0;
+#		nids		= polybius;
+#	}
+#
+#	resource io1 {
+#		type		= standalone_fs;
+#		id		= 0x11;
+#		fsroot		= /local/slio.tsuite0;
+#		nids		= zebes;
+#	}
+#
+#	resource io {
+#		type		= cluster_noshare_lfs;
+#		id		= 0x100;
+#		ios		= io0, io1;
+#	}
+#}
